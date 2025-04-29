@@ -50,7 +50,6 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.12.7/Recharts.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.0/dist/tesseract.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -196,111 +195,173 @@
 
     // 圖片上傳組件（分為攻擊方和防守方）
     const ImageUploader = ({ setInputs, type }) => {
-      const handleImageUpload = async (event) => {
-        const file = event.target.files[0];
-        if (file) {
-          const { data: { text } } = await Tesseract.recognize(file, 'chi_tra');
-          const values = parseText(text, type);
-          setInputs((prev) => ({ ...prev, ...values }));
+  const [uploadedImages, setUploadedImages] = useState([]);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [progress, setProgress] = useState(0);
+
+  const handleImageUpload = (event) => {
+    const files = Array.from(event.target.files);
+    if (files.length > 0) {
+      setUploadedImages(files);
+    }
+  };
+
+  const startRecognition = async () => {
+    if (uploadedImages.length === 0) return;
+    
+    setIsProcessing(true);
+    setProgress(0);
+    
+    let combinedValues = {};
+    
+    for (let i = 0; i < uploadedImages.length; i++) {
+      const file = uploadedImages[i];
+      try {
+        const { data: { text } } = await Tesseract.recognize(
+          file, 
+          'chi_tra',
+          {
+            logger: m => {
+              if (m.status === 'recognizing text') {
+                setProgress(Math.round(m.progress * 100));
+              }
+            }
+          }
+        );
+        
+        const values = parseText(text, type);
+        combinedValues = { ...combinedValues, ...values };
+        
+      } catch (error) {
+        console.error(`Error processing image ${file.name}:`, error);
+      }
+    }
+    
+    setInputs(prev => ({ ...prev, ...combinedValues }));
+    setIsProcessing(false);
+    setProgress(0);
+  };
+
+  const parseText = (text, type) => {
+    const values = {};
+    // 改進後的正則表達式，能更好地匹配中文標籤和數值
+    const regex = /([\u4e00-\u9fa5]+[\u4e00-\u9fa5\s：:]*)[\s：:]*([\d\.\/%-]+)/g;
+    let match;
+    
+    while ((match = regex.exec(text)) !== null) {
+      const label = match[1].trim().replace(/\s+/g, '');
+      const value = match[2];
+
+      if (type === 'attacker') {
+        // 攻擊方屬性識別
+        if (label.includes('技能倍率')) values.skill_multiplier = value;
+        if (label.includes('攻擊') && !label.includes('元素攻擊') && !label.includes('攻擊%')) {
+          const [low] = value.split('-').map(Number);
+          values.D = low.toString();
         }
-      };
-
-      const parseText = (text, type) => {
-        const values = {};
-        const regex = /([\u4e00-\u9fa5]+)[:\s]*([\d\.\/%-]+)/g;
-        let match;
-        while ((match = regex.exec(text)) !== null) {
-          const label = match[1];
-          const value = match[2];
-
-          if (type === 'attacker') {
-            // 攻擊方屬性
-            if (label.includes('技能倍率')) values.skill_multiplier = value;
-            if (label.includes('攻擊')) {
-              const [low] = value.split('-').map(Number);
-              values.D = low.toString();
-            }
-            if (label.includes('元素攻擊')) values.E = value;
-            if (label.includes('會心') && !label.includes('會心傷害')) values.b_c = value;
-            if (label.includes('會心傷害')) {
-              values.d_c = (parseFloat(value) / 100).toString();
-            }
-            if (label.includes('流派剋制') && !label.includes('流派剋制%')) values.R = value;
-            if (label.includes('命中')) values.h = value;
-            if (label.includes('破防')) values.b_d = value;
-            if (label.includes('破盾')) values.b_s = value;
-            if (label.includes('忽視元素抗性')) values.b_e = value;
-            if (label.includes('流派剋制')) {
-              const [, second] = value.split('/').map(v => parseFloat(v));
-              values.flow_percent = (second / 100).toString();
-            }
-            if (label.includes('增傷')) {
-              values.damage_increase = (parseFloat(value) / 100).toString();
-            }
-            if (label.includes('技能增傷')) {
-              values.skill_damage_increase = value;
-            }
-          } else if (type === 'defender') {
-            // 防守方屬性
-            if (label.includes('氣血')) values.hp = value.split('/')[0];
-            if (label.includes('傷害') && !label.includes('會心傷害') && !label.includes('傷害減免')) {
-              values.d_d = value;
-            }
-            if (label.includes('會心') && !label.includes('會心傷害')) values.b_c_defense = value;
-            if (label.includes('會心傷害')) {
-              values.d_c_defense = (parseFloat(value) / 100).toString();
-            }
-            if (label.includes('防禦')) values.d_d = value;
-            if (label.includes('格擋')) values.b_b = value;
-            if (label.includes('元素抗性')) values.d_e = value;
-            if (label.includes('傷害減免')) {
-              values.damage_reduction = (parseFloat(value) / 100).toString();
-            }
-            if (label.includes('怪物克制')) {
-              const [, second] = value.split('/').map(v => parseFloat(v));
-              values.flow_resist_percent = (second / 100).toString();
-            }
-            if (label.includes('流派抵禦')) {
-              const [, second] = value.split('/').map(v => parseFloat(v));
-              values.flow_percent = (second / 100).toString();
-            }
-            if (label.includes('氣盾')) values.d_s = value;
-            if (label.includes('流派抵禦') && !label.includes('流派抵禦%')) values.d_f = value;
-            if (label.includes('技能減免')) values.skill_damage_reduction = value;
-          }
-
-          // 治療強度計算器映射（不變）
-          if (label.includes('破防')) values.armor_break = value;
-          if (label.includes('命中')) values.hit = value;
-          if (label.includes('元素攻擊')) values.elemental_attack = value;
-          if (label.includes('首領剋制')) {
-            const [first] = value.split('/').map(v => parseFloat(v));
-            values.boss_restraint = first.toString();
-          }
-          if (label.includes('流派剋制')) {
-            const [first, second] = value.split('/').map(v => parseFloat(v));
-            values.faction_restraint = Math.max(first, second).toString();
-          }
-          if (label.includes('抗性忽視')) values.resistance_ignore = value;
-          if (label.includes('治療強度')) values.healing_power_equip = value;
+        if (label.includes('元素攻擊')) values.E = value;
+        if (label.includes('會心') && !label.includes('會心傷害')) values.b_c = value;
+        if (label.includes('會心傷害')) {
+          values.d_c = (parseFloat(value) / 100).toString();
         }
-        return values;
-      };
+        if (label.includes('流派剋制') && !label.includes('流派剋制%')) values.R = value;
+        if (label.includes('命中')) values.h = value;
+        if (label.includes('破防')) values.b_d = value;
+        if (label.includes('破盾')) values.b_s = value;
+        if (label.includes('忽視元素抗性')) values.b_e = value;
+        if (label.includes('流派剋制%')) {
+          const [, second] = value.split('/').map(v => parseFloat(v));
+          values.flow_percent = (second / 100).toString();
+        }
+        if (label.includes('增傷')) {
+          values.damage_increase = (parseFloat(value) / 100).toString();
+        }
+        if (label.includes('技能增傷')) {
+          values.skill_damage_increase = value;
+        }
+      } else if (type === 'defender') {
+        // 防守方屬性識別
+        if (label.includes('氣血')) values.hp = value.split('/')[0];
+        if (label.includes('防禦')) values.d_d = value;
+        if (label.includes('會心') && !label.includes('會心傷害')) values.b_c_defense = value;
+        if (label.includes('會心傷害')) {
+          values.d_c_defense = (parseFloat(value) / 100).toString();
+        }
+        if (label.includes('格擋')) values.b_b = value;
+        if (label.includes('元素抗性')) values.d_e = value;
+        if (label.includes('傷害減免')) {
+          values.damage_reduction = (parseFloat(value) / 100).toString();
+        }
+        if (label.includes('怪物克制')) {
+          const [, second] = value.split('/').map(v => parseFloat(v));
+          values.flow_resist_percent = (second / 100).toString();
+        }
+        if (label.includes('流派抵禦%')) {
+          const [, second] = value.split('/').map(v => parseFloat(v));
+          values.flow_percent = (second / 100).toString();
+        }
+        if (label.includes('氣盾')) values.d_s = value;
+        if (label.includes('流派抵禦') && !label.includes('流派抵禦%')) values.d_f = value;
+        if (label.includes('技能減免')) values.skill_damage_reduction = value;
+      }
 
-      return (
-        <div className="mb-6">
-          <label className="block mb-2 text-sm font-medium text-gray-700">
-            {type === 'attacker' ? '上傳攻擊方遊戲截圖' : '上傳防守方遊戲截圖'}
-          </label>
-          <input
-            type="file"
-            accept="image/*"
-            onChange={handleImageUpload}
-            className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-cherry-500 file:text-white hover:file:bg-cherry-600"
-          />
+      // 治療強度計算器映射
+      if (label.includes('破防')) values.armor_break = value;
+      if (label.includes('命中')) values.hit = value;
+      if (label.includes('元素攻擊')) values.elemental_attack = value;
+      if (label.includes('首領剋制')) {
+        const [first] = value.split('/').map(v => parseFloat(v));
+        values.boss_restraint = first.toString();
+      }
+      if (label.includes('流派剋制')) {
+        const [first, second] = value.split('/').map(v => parseFloat(v));
+        values.faction_restraint = Math.max(first, second).toString();
+      }
+      if (label.includes('抗性忽視')) values.resistance_ignore = value;
+      if (label.includes('治療強度')) values.healing_power_equip = value;
+    }
+    return values;
+  };
+
+  return (
+    <div className="mb-6">
+      <label className="block mb-2 text-sm font-medium text-gray-700">
+        {type === 'attacker' ? '上傳攻擊方遊戲截圖' : '上傳防守方遊戲截圖'}
+      </label>
+      <input
+        type="file"
+        accept="image/*"
+        onChange={handleImageUpload}
+        multiple
+        className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-cherry-500 file:text-white hover:file:bg-cherry-600"
+      />
+      
+      {uploadedImages.length > 0 && (
+        <div className="mt-2">
+          <p className="text-xs text-gray-500 mb-2">已選擇 {uploadedImages.length} 張圖片</p>
+          <button
+            onClick={startRecognition}
+            disabled={isProcessing}
+            className="bg-cherry-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-cherry-700 disabled:bg-cherry-300 transition-colors"
+          >
+            {isProcessing ? `識別中... ${progress}%` : '開始識別'}
+          </button>
         </div>
-      );
-    };
+      )}
+      
+      {isProcessing && (
+        <div className="mt-2">
+          <div className="w-full bg-gray-200 rounded-full h-2.5">
+            <div 
+              className="bg-cherry-600 h-2.5 rounded-full" 
+              style={{ width: `${progress}%` }}
+            ></div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
     // 治療強度計算器
     const HealingCalculator = () => {
